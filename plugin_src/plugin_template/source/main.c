@@ -10,17 +10,12 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <pthread.h>
+#include <stdarg.h>
 
 #include <orbis/Pad.h>
 #include <orbis/UserService.h>
 #include <orbis/SystemService.h>
-
-// بعض الدوال بتكون متاحة من خلال الـ SDK مباشرة
-extern int sceKernelMkdir(const char *path, int mode);
-extern int sceKernelUsleep(unsigned int microseconds);
-extern int scePthreadCreate(ScePthread *thread, const ScePthreadAttr *attr, void *(*entry)(void *), void *arg, const char *name);
-extern int scePthreadJoin(ScePthread thread, void **value_ptr);
+#include <orbis/libkernel.h>   // فيه sceKernelMkdir و pthread
 
 #define PLUGIN_NAME         "7md_ScriptLoader"
 #define SCRIPTS_DIR         "/data/7mdXscripts"
@@ -45,17 +40,19 @@ static int  g_selected    = 0;
 static int  g_menuOpen    = 0;
 static int  g_comboLast   = 0;
 static int  g_running     = 1;
-static ScePthread g_thread;
+static OrbisPthread g_thread;
 static int  g_padHandle   = -1;
 
-// ===================== Helpers =====================
-static void Notify(const char *fmt, ...) {
+// ===================== Helper Notify =====================
+// بنستخدم الـ Notify الموجود في plugin_common.h
+// الشكل: Notify(IconUri, FMT, ...)
+static void Msg(const char *fmt, ...) {
     char buf[256];
     va_list args;
     va_start(args, fmt);
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-    final_printf("[7md] %s\n", buf);
+    Notify("", "%s", buf);   // IconUri فاضي
 }
 
 // ===================== Folder =====================
@@ -68,7 +65,6 @@ static void RefreshScripts(void) {
     g_scriptCount = 0;
     g_selected = 0;
 
-    // قائمة تجريبية عشان القائمة تظهر وتشتغل
     const char *demo[] = {
         "godmode.oxc",
         "money.oxc",
@@ -84,33 +80,33 @@ static void RefreshScripts(void) {
         g_scriptCount++;
     }
 
-    Notify("Scripts refreshed (%d found)", g_scriptCount);
+    Msg("Scripts refreshed (%d found)", g_scriptCount);
 }
 
 // ===================== Load / Unload =====================
 static void LoadSelected(void) {
     if (g_scriptCount <= 0) {
-        Notify("No scripts available");
+        Msg("No scripts available");
         return;
     }
     if (g_scripts[g_selected].loaded) {
-        Notify("Already loaded: %s", g_scripts[g_selected].name);
+        Msg("Already loaded: %s", g_scripts[g_selected].name);
         return;
     }
 
     g_scripts[g_selected].loaded = 1;
-    Notify("Loaded: %s", g_scripts[g_selected].name);
+    Msg("Loaded: %s", g_scripts[g_selected].name);
 }
 
 static void UnloadSelected(void) {
     if (g_scriptCount <= 0) return;
     if (!g_scripts[g_selected].loaded) {
-        Notify("Not loaded: %s", g_scripts[g_selected].name);
+        Msg("Not loaded: %s", g_scripts[g_selected].name);
         return;
     }
 
     g_scripts[g_selected].loaded = 0;
-    Notify("Unloaded: %s", g_scripts[g_selected].name);
+    Msg("Unloaded: %s", g_scripts[g_selected].name);
 }
 
 static void UnloadAll(void) {
@@ -121,7 +117,7 @@ static void UnloadAll(void) {
             count++;
         }
     }
-    Notify("Unloaded %d scripts", count);
+    Msg("Unloaded %d scripts", count);
 }
 
 // ===================== Draw Menu =====================
@@ -157,24 +153,24 @@ static void DrawMenu(void) {
 
 // ===================== Input + Tick =====================
 static void Tick(void) {
-    ScePadData pad;
+    OrbisPadData pad;
     memset(&pad, 0, sizeof(pad));
 
     if (g_padHandle >= 0) {
         scePadReadState(g_padHandle, &pad);
     }
 
-    int r1 = (pad.buttons & SCE_PAD_BUTTON_R1) != 0;
-    int r2 = (pad.buttons & SCE_PAD_BUTTON_R2) != 0;
+    int r1 = (pad.buttons & ORBIS_PAD_BUTTON_R1) != 0;
+    int r2 = (pad.buttons & ORBIS_PAD_BUTTON_R2) != 0;
 
     if (r1 && r2) {
         if (!g_comboLast) {
             g_menuOpen = !g_menuOpen;
             if (g_menuOpen) {
                 RefreshScripts();
-                Notify("Menu Opened");
+                Msg("Menu Opened");
             } else {
-                Notify("Menu Closed");
+                Msg("Menu Closed");
             }
             g_comboLast = 1;
         }
@@ -188,26 +184,26 @@ static void Tick(void) {
     uint32_t pressed = pad.buttons & \~lastButtons;
     lastButtons = pad.buttons;
 
-    if (pressed & SCE_PAD_BUTTON_UP) {
+    if (pressed & ORBIS_PAD_BUTTON_UP) {
         if (g_selected > 0) g_selected--;
     }
-    if (pressed & SCE_PAD_BUTTON_DOWN) {
+    if (pressed & ORBIS_PAD_BUTTON_DOWN) {
         if (g_selected < g_scriptCount - 1) g_selected++;
     }
-    if (pressed & SCE_PAD_BUTTON_CROSS) {
+    if (pressed & ORBIS_PAD_BUTTON_CROSS) {
         LoadSelected();
     }
-    if (pressed & SCE_PAD_BUTTON_SQUARE) {
+    if (pressed & ORBIS_PAD_BUTTON_SQUARE) {
         UnloadSelected();
     }
-    if (pressed & SCE_PAD_BUTTON_TRIANGLE) {
+    if (pressed & ORBIS_PAD_BUTTON_TRIANGLE) {
         UnloadAll();
     }
-    if (pressed & SCE_PAD_BUTTON_CIRCLE) {
+    if (pressed & ORBIS_PAD_BUTTON_CIRCLE) {
         g_menuOpen = 0;
-        Notify("Menu Closed");
+        Msg("Menu Closed");
     }
-    if (pressed & SCE_PAD_BUTTON_OPTIONS) {
+    if (pressed & ORBIS_PAD_BUTTON_OPTIONS) {
         RefreshScripts();
     }
 
@@ -216,11 +212,10 @@ static void Tick(void) {
 
 // ===================== Thread =====================
 static void* LoaderThread(void *arg) {
-    sceKernelUsleep(12000000); // استنى 12 ثانية
+    sceKernelUsleep(12000000);
 
     EnsureFolder();
 
-    // Pad init
     scePadInit();
 
     OrbisUserServiceInitializeParams param;
@@ -230,10 +225,10 @@ static void* LoaderThread(void *arg) {
 
     int userId = 0;
     sceUserServiceGetInitialUser(&userId);
-    g_padHandle = scePadOpen(userId, SCE_PAD_PORT_TYPE_STANDARD, 0, NULL);
+    g_padHandle = scePadOpen(userId, ORBIS_PAD_PORT_TYPE_STANDARD, 0, NULL);
 
     RefreshScripts();
-    Notify("7md Script Loader ready - Discord: just_7md");
+    Msg("7md Script Loader ready - Discord: just_7md");
 
     while (g_running) {
         Tick();
