@@ -6,20 +6,26 @@
 // ============================================================
 
 #include "plugin_common.h"
-#include <orbis/Pad.h>
-#include <orbis/UserService.h>
-#include <orbis/SystemService.h>
-#include <orbis/Kernel.h>
-#include <pthread.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
+
+#include <orbis/Pad.h>
+#include <orbis/UserService.h>
+#include <orbis/SystemService.h>
+
+// بعض الدوال بتكون متاحة من خلال الـ SDK مباشرة
+extern int sceKernelMkdir(const char *path, int mode);
+extern int sceKernelUsleep(unsigned int microseconds);
+extern int scePthreadCreate(ScePthread *thread, const ScePthreadAttr *attr, void *(*entry)(void *), void *arg, const char *name);
+extern int scePthreadJoin(ScePthread thread, void **value_ptr);
 
 #define PLUGIN_NAME         "7md_ScriptLoader"
 #define SCRIPTS_DIR         "/data/7mdXscripts"
 #define MAX_SCRIPTS         64
 #define MAX_NAME_LEN        128
-#define MAX_SCRIPT_SIZE     (3 * 1024 * 1024)
 
 attr_public const char *g_pluginName = PLUGIN_NAME;
 attr_public const char *g_pluginDesc = "7md Script Loader | Discord: just_7md";
@@ -52,13 +58,6 @@ static void Notify(const char *fmt, ...) {
     final_printf("[7md] %s\n", buf);
 }
 
-static int EndsWith(const char *str, const char *suffix) {
-    size_t len = strlen(str);
-    size_t suflen = strlen(suffix);
-    if (len < suflen) return 0;
-    return strcmp(str + len - suflen, suffix) == 0;
-}
-
 // ===================== Folder =====================
 static void EnsureFolder(void) {
     sceKernelMkdir(SCRIPTS_DIR, 0777);
@@ -69,11 +68,7 @@ static void RefreshScripts(void) {
     g_scriptCount = 0;
     g_selected = 0;
 
-    // ========== قراءة الفولدر ==========
-    // النسخة دي مبسطة ومستقرة.
-    // لو عايز قراءة حقيقية كاملة من القرص، هتحتاج SceKernelDirent حسب الـ SDK عندك.
-    // حالياً بنحط قائمة تجريبية عشان القائمة تظهر وتشتغل 100%.
-
+    // قائمة تجريبية عشان القائمة تظهر وتشتغل
     const char *demo[] = {
         "godmode.oxc",
         "money.oxc",
@@ -103,10 +98,6 @@ static void LoadSelected(void) {
         return;
     }
 
-    // =====================================================
-    // هنا مكان تنفيذ السكريبت الحقيقي (.oxc)
-    // حالياً بنغير الحالة فقط عشان القائمة تشتغل كاملة
-    // =====================================================
     g_scripts[g_selected].loaded = 1;
     Notify("Loaded: %s", g_scripts[g_selected].name);
 }
@@ -150,11 +141,9 @@ static void DrawMenu(void) {
     } else {
         for (int i = 0; i < g_scriptCount; i++) {
             if (i == g_selected)
-                final_printf(" > %s %s\n", g_scripts[i].name,
-                             g_scripts[i].loaded ? "[ON]" : "");
+                final_printf(" > %s %s\n", g_scripts[i].name, g_scripts[i].loaded ? "[ON]" : "");
             else
-                final_printf("   %s %s\n", g_scripts[i].name,
-                             g_scripts[i].loaded ? "[ON]" : "");
+                final_printf("   %s %s\n", g_scripts[i].name, g_scripts[i].loaded ? "[ON]" : "");
         }
     }
 
@@ -178,7 +167,6 @@ static void Tick(void) {
     int r1 = (pad.buttons & SCE_PAD_BUTTON_R1) != 0;
     int r2 = (pad.buttons & SCE_PAD_BUTTON_R2) != 0;
 
-    // ===== R1 + R2 =====
     if (r1 && r2) {
         if (!g_comboLast) {
             g_menuOpen = !g_menuOpen;
@@ -196,7 +184,6 @@ static void Tick(void) {
 
     if (!g_menuOpen) return;
 
-    // ===== أزرار القائمة =====
     static uint32_t lastButtons = 0;
     uint32_t pressed = pad.buttons & \~lastButtons;
     lastButtons = pad.buttons;
@@ -207,16 +194,16 @@ static void Tick(void) {
     if (pressed & SCE_PAD_BUTTON_DOWN) {
         if (g_selected < g_scriptCount - 1) g_selected++;
     }
-    if (pressed & SCE_PAD_BUTTON_CROSS) {         // X
+    if (pressed & SCE_PAD_BUTTON_CROSS) {
         LoadSelected();
     }
-    if (pressed & SCE_PAD_BUTTON_SQUARE) {       // Square
+    if (pressed & SCE_PAD_BUTTON_SQUARE) {
         UnloadSelected();
     }
-    if (pressed & SCE_PAD_BUTTON_TRIANGLE) {     // Triangle
+    if (pressed & SCE_PAD_BUTTON_TRIANGLE) {
         UnloadAll();
     }
-    if (pressed & SCE_PAD_BUTTON_CIRCLE) {       // O
+    if (pressed & SCE_PAD_BUTTON_CIRCLE) {
         g_menuOpen = 0;
         Notify("Menu Closed");
     }
@@ -229,13 +216,13 @@ static void Tick(void) {
 
 // ===================== Thread =====================
 static void* LoaderThread(void *arg) {
-    // استنى اللعبة تفتح
-    sceKernelUsleep(12000000);
+    sceKernelUsleep(12000000); // استنى 12 ثانية
 
     EnsureFolder();
 
-    // تهيئة الـ Pad
+    // Pad init
     scePadInit();
+
     OrbisUserServiceInitializeParams param;
     memset(&param, 0, sizeof(param));
     param.priority = ORBIS_KERNEL_PRIO_FIFO_LOWEST;
@@ -250,7 +237,7 @@ static void* LoaderThread(void *arg) {
 
     while (g_running) {
         Tick();
-        sceKernelUsleep(16000); // \~60 FPS
+        sceKernelUsleep(16000);
     }
 
     if (g_padHandle >= 0)
@@ -259,7 +246,7 @@ static void* LoaderThread(void *arg) {
     return NULL;
 }
 
-// ===================== Plugin Entry Points =====================
+// ===================== Plugin Entry =====================
 s32 attr_public plugin_load(s32 argc, const char *argv[]) {
     final_printf("[GoldHEN] <%s\\Ver.0x%08x> %s\n", g_pluginName, g_pluginVersion, __func__);
     scePthreadCreate(&g_thread, NULL, LoaderThread, NULL, "7md_Loader");
